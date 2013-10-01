@@ -1,0 +1,5 @@
+python-os-apply-config (0.1.1-1) unstable; urgency=low
+
+  * Initial release. (Closes: #725089)
+
+ -- Thomas Goirand <zigo@debian.org>  Mon, 23 Sep 2013 01:54:36 +0800

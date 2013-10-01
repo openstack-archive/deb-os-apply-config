@@ -1,0 +1,12 @@
+#!/usr/bin/make -f
+
+UPSTREAM_GIT = git://github.com/openstack/os-apply-config.git
+include /usr/share/openstack-pkg-tools/pkgos.make
+
+%:
+	dh $@ --buildsystem=python_distutils --with python2
+
+override_dh_auto_test:
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+	python setup.py testr --slowest --testr-args='--subunit  '
+endif
