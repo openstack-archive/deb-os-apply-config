@@ -27,6 +27,7 @@ from os_apply_config import collect_config
 from os_apply_config import config_exception as exc
 from os_apply_config import renderers
 from os_apply_config import value_types
+from os_apply_config import version
 
 TEMPLATES_DIR = os.environ.get('OS_CONFIG_APPLIER_TEMPLATES', None)
 if TEMPLATES_DIR is None:
@@ -34,6 +35,8 @@ if TEMPLATES_DIR is None:
     if not os.path.isdir(TEMPLATES_DIR):
         # Backwards compat with the old name.
         TEMPLATES_DIR = '/opt/stack/os-config-applier/templates'
+OS_CONFIG_FILES_PATH = os.environ.get(
+    'OS_CONFIG_FILES_PATH', '/var/run/os-collect-config/os_config_files.json')
 
 
 def install_config(
@@ -62,17 +65,23 @@ def print_key(
             else:
                 raise exc.ConfigException(
                     'key %s does not exist in %s' % (key, config_path))
-    value_types.ensure_type(config, type_name)
+    value_types.ensure_type(str(config), type_name)
     print(str(config))
 
 
 def write_file(path, contents):
     logger.info("writing %s", path)
+    if os.path.exists(path):
+        stat = os.stat(path)
+        mode, uid, gid = stat.st_mode, stat.st_uid, stat.st_gid
+    else:
+        mode, uid, gid = 0o644, -1, -1
     d = os.path.dirname(path)
     os.path.exists(d) or os.makedirs(d)
     with tempfile.NamedTemporaryFile(dir=d, delete=False) as newfile:
         newfile.write(contents)
-        os.chmod(newfile.name, 0o644)
+        os.chmod(newfile.name, mode)
+        os.chown(newfile.name, uid, gid)
         os.rename(newfile.name, path)
 
 # return a map of filenames->filecontents
@@ -96,6 +105,7 @@ def render_template(template, config):
                 "key '%s' from template '%s' does not exist in metadata file."
                 % (e.key, template))
         except Exception as e:
+            logger.error("%s", e)
             raise exc.ConfigException(
                 "could not render moustache template %s" % template)
 
@@ -125,7 +135,7 @@ def render_executable(path, config):
 
 def template_paths(root):
     res = []
-    for cur_root, subdirs, files in os.walk(root):
+    for cur_root, _subdirs, files in os.walk(root):
         for f in files:
             inout = (os.path.join(cur_root, f), os.path.join(
                 strip_prefix(root, cur_root), f))
@@ -171,7 +181,7 @@ def parse_opts(argv):
                         default=[])
     parser.add_argument('--fallback-metadata', metavar='FALLBACK_METADATA',
                         nargs='*', help='Files to search when OS_CONFIG_FILES'
-                        'is empty. (default: %(default)s)',
+                        ' is empty. (default: %(default)s)',
                         default=['/var/cache/heat-cfntools/last_metadata',
                                  '/var/lib/heat-cfntools/cfn-init-data',
                                  '/var/lib/cloud/data/cfn-init-data'])
@@ -190,16 +200,31 @@ def parse_opts(argv):
     parser.add_argument('--type', default='default',
                         help='exit with error if the specified --key does not'
                              ' match type. Valid types are'
-                             ' <int|default|netaddress|dsn|raw>')
+                             ' <int|default|netaddress|dsn|swiftdevices|raw>')
     parser.add_argument('--key-default',
                         help='This option only affects running with --key.'
                              ' Print this if key is not found. This value is'
                              ' not subject to type restrictions. If --key is'
                              ' specified and no default is specified, program'
                              ' exits with an error on missing key.')
+    parser.add_argument('--version', action='version',
+                        version=version.version_info.version_string())
+    parser.add_argument('--os-config-files',
+                        default=OS_CONFIG_FILES_PATH,
+                        help='Set path to os_config_files.json')
     opts = parser.parse_args(argv[1:])
 
     return opts
+
+
+def load_list_from_json(json_file):
+    json_obj = []
+    if os.path.exists(json_file):
+        with open(json_file) as ocf:
+            json_obj = json.loads(ocf.read())
+    if not isinstance(json_obj, list):
+        raise ValueError("No list defined in json file: %s" % json_file)
+    return json_obj
 
 
 def main(argv=sys.argv):
@@ -211,6 +236,8 @@ def main(argv=sys.argv):
     if not opts.metadata:
         if 'OS_CONFIG_FILES' in os.environ:
             opts.metadata = os.environ['OS_CONFIG_FILES'].split(':')
+        else:
+            opts.metadata = load_list_from_json(opts.os_config_files)
 
     try:
         if opts.templates is None:
@@ -245,3 +272,6 @@ logger.setLevel(logging.INFO)
 add_handler(logger, logging.StreamHandler())
 if os.geteuid() == 0:
     add_handler(logger, logging.FileHandler('/var/log/os-apply-config.log'))
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv))

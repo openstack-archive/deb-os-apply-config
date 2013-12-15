@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import atexit
 import json
 import os
 import tempfile
@@ -33,6 +34,7 @@ TEMPLATE_PATHS = [
 # config for example tree
 CONFIG = {
     "x": "foo",
+    "y": False,
     "database": {
     "url": "sqlite:///blah"
     }
@@ -90,6 +92,15 @@ class TestRunOSConfigApplier(testtools.TestCase):
                          self.stdout.read().strip())
         self.assertEqual('', self.logger.output)
 
+    def test_print_non_string_key(self):
+        self.assertEqual(0, apply_config.main(
+            ['os-apply-config.py', '--metadata', self.path, '--key',
+             'y', '--type', 'raw']))
+        self.stdout.seek(0)
+        self.assertEqual(str(CONFIG['y']),
+                         self.stdout.read().strip())
+        self.assertEqual('', self.logger.output)
+
     def test_print_key_missing(self):
         self.assertEqual(1, apply_config.main(
             ['os-apply-config.py', '--metadata', self.path, '--key',
@@ -117,12 +128,28 @@ class TestRunOSConfigApplier(testtools.TestCase):
             self.stdout.read().strip(), apply_config.TEMPLATES_DIR)
         self.assertEqual('', self.logger.output)
 
+    def test_os_config_files(self):
+        with tempfile.NamedTemporaryFile() as fake_os_config_files:
+            with tempfile.NamedTemporaryFile() as fake_config:
+                fake_config.write(json.dumps(CONFIG))
+                fake_config.flush()
+                fake_os_config_files.write(json.dumps([fake_config.name]))
+                fake_os_config_files.flush()
+                apply_config.main(['os-apply-config',
+                                   '--key', 'database.url',
+                                   '--type', 'raw',
+                                   '--os-config-files',
+                                   fake_os_config_files.name])
+                self.stdout.seek(0)
+                self.assertEqual(
+                    CONFIG['database']['url'], self.stdout.read().strip())
+
 
 class OSConfigApplierTestCase(testtools.TestCase):
 
     def setUp(self):
         super(OSConfigApplierTestCase, self).setUp()
-        self.useFixture(fixtures.FakeLogger('os-apply-config'))
+        self.logger = self.useFixture(fixtures.FakeLogger('os-apply-config'))
         self.useFixture(fixtures.NestedTempfile())
 
     def test_install_config(self):
@@ -150,6 +177,26 @@ class OSConfigApplierTestCase(testtools.TestCase):
             assert os.path.exists(full_path)
             self.assertEqual(open(full_path).read(), contents)
 
+    def test_respect_file_permissions(self):
+        fd, path = tempfile.mkstemp()
+        with os.fdopen(fd, 'w') as t:
+            t.write(json.dumps(CONFIG))
+            t.flush()
+        tmpdir = tempfile.mkdtemp()
+        template = "/etc/keystone/keystone.conf"
+        target_file = os.path.join(tmpdir, template[1:])
+        os.makedirs(os.path.dirname(target_file))
+        # File dosen't exist, use the default mode (644)
+        apply_config.install_config([path], TEMPLATES, tmpdir, False)
+        self.assertEqual(os.stat(target_file).st_mode, 0o100644)
+        self.assertEqual(open(target_file).read(), OUTPUT[template])
+        # Set a different mode:
+        os.chmod(target_file, 0o600)
+        apply_config.install_config([path], TEMPLATES, tmpdir, False)
+        # The permissions should be preserved
+        self.assertEqual(os.stat(target_file).st_mode, 0o100600)
+        self.assertEqual(open(target_file).read(), OUTPUT[template])
+
     def test_build_tree(self):
         self.assertEqual(apply_config.build_tree(
             apply_config.template_paths(TEMPLATES), CONFIG), OUTPUT)
@@ -162,6 +209,18 @@ class OSConfigApplierTestCase(testtools.TestCase):
             config_exception.ConfigException,
             apply_config.render_template, template(
                 "/etc/glance/script.conf"), {})
+
+    def test_render_template_bad_template(self):
+        tdir = self.useFixture(fixtures.TempDir())
+        bt_path = os.path.join(tdir.path, 'bad_template')
+        with open(bt_path, 'w') as bt:
+            bt.write("{{#foo}}bar={{bar}}{{/bar}}")
+        e = self.assertRaises(config_exception.ConfigException,
+                              apply_config.render_template,
+                              bt_path, {'foo': [{'bar':
+                                                 'abc'}]})
+        self.assertIn('could not render moustache template', str(e))
+        self.assertIn('Section end tag mismatch', self.logger.output)
 
     def test_render_moustache(self):
         self.assertEqual(apply_config.render_moustache("ab{{x.a}}cd", {
@@ -195,3 +254,32 @@ class OSConfigApplierTestCase(testtools.TestCase):
                           apply_config.strip_hash, h, 'a.nonexistent')
         self.assertRaises(config_exception.ConfigException,
                           apply_config.strip_hash, h, 'a.c')
+
+    def test_load_list_from_json(self):
+
+        def mkstemp():
+            fd, path = tempfile.mkstemp()
+            atexit.register(
+                lambda: os.path.exists(path) and os.remove(path))
+            return (fd, path)
+
+        def write_contents(fd, contents):
+            with os.fdopen(fd, 'w') as t:
+                t.write(contents)
+                t.flush()
+
+        fd, path = mkstemp()
+        load_list = apply_config.load_list_from_json
+        err = self.assertRaises(ValueError, load_list, path)
+        self.assertEqual("No JSON object could be decoded", str(err))
+        write_contents(fd, json.dumps(["/tmp/config.json"]))
+        json_obj = load_list(path)
+        self.assertEqual(["/tmp/config.json"], json_obj)
+        os.remove(path)
+        self.assertEqual([], load_list(path))
+
+        fd, path = mkstemp()
+        write_contents(fd, json.dumps({}))
+        err = self.assertRaises(ValueError, load_list, path)
+        self.assertEqual(
+            "No list defined in json file: %s" % path, str(err))
