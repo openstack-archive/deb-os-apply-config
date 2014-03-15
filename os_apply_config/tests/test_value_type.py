@@ -69,7 +69,25 @@ class ValueTypeTestCase(testtools.TestCase):
 
     def test_net_address_bad(self):
         self.assertRaises(config_exception.ConfigException,
-                          value_types.ensure_type, "192.0.2.1;DROP TABLE foo")
+                          value_types.ensure_type, "192.0.2.1;DROP TABLE foo",
+                          'netaddress')
+
+    def test_netdevice(self):
+        self.assertEqual('eth0',
+                         value_types.ensure_type('eth0', 'netdevice'))
+
+    def test_netdevice_dash(self):
+        self.assertEqual('br-ctlplane',
+                         value_types.ensure_type('br-ctlplane', 'netdevice'))
+
+    def test_netdevice_alias(self):
+        self.assertEqual('eth0:1',
+                         value_types.ensure_type('eth0:1', 'netdevice'))
+
+    def test_netdevice_bad(self):
+        self.assertRaises(config_exception.ConfigException,
+                          value_types.ensure_type, "br-tun; DROP TABLE bar",
+                          'netdevice')
 
     def test_dsn_nopass(self):
         test_dsn = 'mysql://user@host/db'
@@ -125,3 +143,16 @@ class ValueTypeTestCase(testtools.TestCase):
                           value_types.ensure_type,
                           test_swiftdevices,
                           'swiftdevices')
+
+    def test_username(self):
+        for test_username in ['guest', 'guest_13-42']:
+            self.assertEqual(test_username, value_types.ensure_type(
+                             test_username,
+                             'username'))
+
+    def test_username_bad(self):
+        for test_username in ['guest`ls`', 'guest$PASSWD', 'guest 2']:
+            self.assertRaises(config_exception.ConfigException,
+                              value_types.ensure_type,
+                              test_username,
+                              'username')
