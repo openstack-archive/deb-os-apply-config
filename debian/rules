@@ -16,3 +16,7 @@ ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
 		cat $$TEMP_REZ | subunit-stats && \
 		rm -f $$TEMP_REZ
 endif
+
+override_dh_clean:
+	dh_clean -O--buildsystem=python_distutils
+	rm -rf .testrepository
