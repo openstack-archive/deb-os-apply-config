@@ -35,7 +35,7 @@ Depends: python-anyjson (>= 0.3.3),
 Recommends: ${python:Recommends}
 Description: Creates config files out of cloud metadata
  os-apply-config apply configuration out of the cloud metadata (JSON) that it
- recieves from a metadata server.
+ receives from a metadata server.
  .
  It turns metadata from one or more JSON files like this:
  .
